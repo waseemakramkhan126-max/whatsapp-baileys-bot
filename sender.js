@@ -1,14 +1,8 @@
+const { sendButtons } = require('malvin-btns');
 const config = require('./config');
 const { addToQueue } = require('./queue');
 
-/**
- * @param {object} sock
- * @param {string} jid
- * @param {string} text - reply
- * @param {object} msgKey - message key for read receipt
- * @param {boolean} shouldRead - true if blue tick dena hai
- */
-async function sendHumanLikeReply(sock, jid, text, msgKey, shouldRead) {
+async function sendHumanLikeReply(sock, jid, text, msgKeys, shouldRead) {
     await addToQueue(async () => {
         try {
             // Phase 3: Smart delay
@@ -16,8 +10,8 @@ async function sendHumanLikeReply(sock, jid, text, msgKey, shouldRead) {
             await delay(smartDelay);
 
             // Read receipt at this moment (right before typing)
-            if (shouldRead && msgKey) {
-                await sock.readMessages([msgKey]);
+            if (shouldRead && msgKeys) {
+                await sock.readMessages([msgKeys]);
             }
 
             // Composing
@@ -44,6 +38,16 @@ async function sendHumanLikeReply(sock, jid, text, msgKey, shouldRead) {
                 await delay(1000);
             }
 
+            // 🛡️ AntiBan Check (Message bhejne se pehle)
+            if (sock.antiban) {
+                const decision = await sock.antiban.beforeSend(jid, "text");
+                if (!decision.allowed) {
+                    console.log(`🛑 AntiBan blocked text to ${jid}. Reason: ${decision.reason}`);
+                    return;
+                }
+                await delay(decision.delayMs || 0);
+            }
+
             // Chunking
             if (chars > config.CHUNK_SIZE) {
                 const chunks = splitIntoChunks(text, config.CHUNK_SIZE);
@@ -56,8 +60,56 @@ async function sendHumanLikeReply(sock, jid, text, msgKey, shouldRead) {
             } else {
                 await sock.sendMessage(jid, { text });
             }
+
+            // 🛡️ AntiBan Record (Message bhejne ke baad)
+            if (sock.antiban) {
+                sock.antiban.afterSend(jid, "text");
+            }
+
         } catch (err) {
             console.error('Send error:', err);
+        }
+    });
+}
+
+async function sendButtonReply(sock, jid, buttonData, msgKeys, shouldRead) {
+    await addToQueue(async () => {
+        try {
+            const smartDelay = config.SMART_DELAY();
+            await delay(smartDelay);
+
+            if (shouldRead && msgKeys) {
+                await sock.readMessages([msgKeys]);
+            }
+
+            await sock.sendPresenceUpdate('composing', jid);
+
+            const chars = buttonData.text ? buttonData.text.length : 20;
+            let typingTime = chars < config.SHORT_TEXT_THRESHOLD 
+                ? config.SHORT_TYPING_TIME() 
+                : config.LONG_TYPING_TIME();
+            
+            await delay(typingTime);
+
+            // 🛡️ AntiBan Check (Button bhejne se pehle)
+            if (sock.antiban) {
+                const decision = await sock.antiban.beforeSend(jid, "button");
+                if (!decision.allowed) {
+                    console.log(`🛑 AntiBan blocked button to ${jid}. Reason: ${decision.reason}`);
+                    return;
+                }
+                await delay(decision.delayMs || 0);
+            }
+
+            await sendButtons(sock, jid, buttonData);
+
+            // 🛡️ AntiBan Record (Button bhejne ke baad)
+            if (sock.antiban) {
+                sock.antiban.afterSend(jid, "button");
+            }
+
+        } catch (err) {
+            console.error('Button send error:', err);
         }
     });
 }
@@ -74,4 +126,4 @@ function splitIntoChunks(str, size) {
     return chunks;
 }
 
-module.exports = { sendHumanLikeReply };
+module.exports = { sendHumanLikeReply, sendButtonReply };

@@ -5,8 +5,9 @@ const fs = require('fs');
 const { WebSocketServer } = require('ws');
 const { toDataURL } = require('qrcode');
 const { createClient } = require('@supabase/supabase-js'); // 👈 Supabase import
+const { AntiBan } = require('baileys-antiban');
 const { handleIncomingMessage } = require('./debounce');
-const { sendHumanLikeReply } = require('./sender');
+const { sendHumanLikeReply, sendButtonReply } = require('./sender');
 const { shouldNightReply } = require('./nightmode');
 const config = require('./config');
 
@@ -22,6 +23,7 @@ const supabase = createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY);
 
 // 🧠 History Memory Store
 const chatHistories = new Map();
+const lastReplyTimes = new Map(); // Har customer ka timer track karne ke liye
 
 function appendToHistory(jid, role, content) {
     if (!chatHistories.has(jid)) {
@@ -82,17 +84,25 @@ server.listen(3000, () => {
     broadcastLog('🚀 Bot server started and ready');   // 👈 add
 });
 
-async function startBot() {
+    async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
-    const sock = makeWASocket({
-        auth: state,
-        syncFullHistory: false,
-        shouldSyncHistoryMessage: (msg) => {
-            const allowed = ['PUSH_NAME', 'NON_BLOCKING_DATA', 'RECENT'];
-            return allowed.includes(msg.syncType);
-        },
+        // 🛡️ AntiBan Protection Layer (Fixed Config)
+    const antiban = new AntiBan({
+        maxPerMinute: 10,
+        maxPerHour: 200,
+        warmupDays: 7,
+        day1Limit: 20,
+        growthFactor: 1.8,
+        logging: true
     });
+
+        const sock = makeWASocket({
+        auth: state,
+        syncFullHistory: false
+    });
+     
+    sock.antiban = antiban;
 
     // QR via web
     sock.ev.on('connection.update', async (update) => {
@@ -165,7 +175,7 @@ async function startBot() {
 
             console.log('3. Sending to handleIncomingMessage...');
             
-            handleIncomingMessage(jid, text, async (combinedText) => {
+                        handleIncomingMessage(jid, text, msg.key, async (combinedText, keys) => {
                 if (!isBotRunning) {
                     broadcastLog(`⏸ Bot is paused, ignoring message from ${jid}`);
                     return;
@@ -176,11 +186,17 @@ async function startBot() {
                 // Night mode check
                 const nightAction = shouldNightReply(jid);
                 if (nightAction === true) {
-                    await sendHumanLikeReply(sock, jid, config.NIGHT_REPLY_TEXT, msg.key, true);
+                    await sendHumanLikeReply(sock, jid, config.NIGHT_REPLY_TEXT, keys, true);
                     broadcastLog(`📤 Night auto-reply sent to ${jid}`);
                     return;
 
-                } else if (nightAction === false) {
+                                } else if (nightAction === false) {
+                    // 👇 NAYA CODE: Read, Type, aur Pause (Insaan jaisa behavior) 👇
+                    await sock.readMessages(keys); // 👈 keys array use karein // Blue Tick
+                    await sock.sendPresenceUpdate('composing', jid); // Typing shuru
+                    await new Promise(r => setTimeout(r, 3000)); // 3 second wait
+                    await sock.sendPresenceUpdate('paused', jid); // Typing band (cancel)
+                    console.log(`🌙 Night mode: Read + Typing shown, but ignored.`);
                     return;
                 }
 
@@ -206,26 +222,61 @@ try {
 }
 // =========================================================
 
-                // 1. User ka message pehle history mein save karein
-                appendToHistory(jid, 'user', combinedText);
+                                // ===== AI COMMENTED OUT =====
+                // appendToHistory(jid, 'user', combinedText);
+                // let aiReply;
+                // try {
+                //     aiReply = await getAIResponse(jid, finalMessage);
+                //     console.log('🤖 AI Reply ready:', aiReply);
+                // } catch (err) {
+                //     console.error('❌ AI Error:', err);
+                //     aiReply = 'Sorry, error getting reply';
+                // }
 
-                // 2. AI call
-                let aiReply;
-                try {
-                    aiReply = await getAIResponse(jid, finalMessage);
-                    console.log('🤖 AI Reply ready:', aiReply);
-                } catch (err) {
-                    console.error('❌ AI Error:', err);
-                    aiReply = 'Sorry, error getting reply';
+                const shouldRead = true;
+                                // ===== TIMER (COOLDOWN) CHECK =====
+                const cooldownMs = config.REPLY_COOLDOWN_MINUTES * 60 * 1000;
+                const lastTime = lastReplyTimes.get(jid) || 0;
+                const now = Date.now();
+
+                                // Agar timer khatam nahi hua, to reply na bhejein
+                if (now - lastTime < cooldownMs) {
+                    // 👇 NAYA CODE: Read, Type, aur Pause (Insaan jaisa behavior) 👇
+                    await sock.readMessages(keys); // Blue Tick
+                    await sock.sendPresenceUpdate('composing', jid); // Typing shuru
+                    await new Promise(r => setTimeout(r, 3000)); // 3 second wait
+                    await sock.sendPresenceUpdate('paused', jid); // Typing band (cancel)
+                    console.log(`⏳ Cooldown active for ${jid}. Read + Typing shown, ignored.`);
+                    return;
                 }
 
-                const lower = combinedText.toLowerCase().trim();
-                const isDeadEnd = config.DEAD_END_KEYWORDS.some(kw => lower === kw);
-                const shouldRead = !isDeadEnd;
+                // Timer update karein (taake agle 30 min tak dobara reply na jaye)
+                lastReplyTimes.set(jid, now);
 
-                console.log('4. Sending reply to WhatsApp...');
-                await sendHumanLikeReply(sock, jid, aiReply, msg.key, shouldRead);
-                broadcastLog(`📤 Reply to ${jid}: ${aiReply}`);
+                // 👇 YEH NAYI LINES ADD KAREIN (Blue tick ke liye) 👇
+                if (shouldRead && keys) {
+                    await sock.readMessages(keys); 
+                }
+
+                // ===== BUTTON REPLY LOGIC =====
+                const buttonData = {
+                    title: 'Aapka Swagat Hai!',
+                    text: 'Humse raabta karne ke liye neeche diye gaye button par click karein.',
+                    footer: 'Faster Support',
+                    buttons: [
+                        {
+                            name: 'cta_url',
+                            buttonParamsJson: JSON.stringify({
+                                display_text: '🌐 Web App Kholain',
+                                url: 'https://waseemakramkhan126-max.github.io/faster-v2/new-order.html' // 👈 Yahan apna link dalein
+                            })
+                        }
+                    ]
+                };
+
+                console.log('4. Sending button reply to WhatsApp...');
+                                await sendButtonReply(sock, jid, buttonData, keys, shouldRead); // 👈 keys pass karein
+                broadcastLog(`📤 Button reply sent to ${jid}`);
             });
         }
     });

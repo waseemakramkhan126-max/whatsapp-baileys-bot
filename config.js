@@ -24,6 +24,8 @@ module.exports = {
     NIGHT_START_HOUR: 0,   // 12 AM
     NIGHT_END_HOUR: 8,     // 8 AM
     NIGHT_REPLY_TEXT: "Maaf kijiye, hamari service abhi band hai. Subah 8 baje open hogi.",
+        // Auto-reply timer (minutes mein)
+    REPLY_COOLDOWN_MINUTES: 5, 
 
     // AI Endpoint (badal dein apne Supabase edge function se)
     AI_ENDPOINT: 'https://hkabhikizdlbavfkualt.supabase.co/functions/v1/chat-brain',
