@@ -4,16 +4,16 @@ const http = require('http');
 const fs = require('fs');
 const { WebSocketServer } = require('ws');
 const { toDataURL } = require('qrcode');
-const { createClient } = require('@supabase/supabase-js'); // 👈 Supabase import
+const { createClient } = require('@supabase/supabase-js');
 const { AntiBan } = require('baileys-antiban');
 const { handleIncomingMessage } = require('./debounce');
-const { sendHumanLikeReply, sendButtonReply } = require('./sender');
+const { sendHumanLikeReply, sendButtonReply, sendHumanLikeImage } = require('./sender');
 const { shouldNightReply } = require('./nightmode');
 const config = require('./config');
 
 const app = express();
-const server = http.createServer(app);               // 👈 ADD
-const wss = new WebSocketServer({ server });         // 👈 ADD
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
 let appStarted = false;
 let reconnectAttempts = 0;
 let isBotRunning = true;
@@ -21,21 +21,43 @@ let isBotRunning = true;
 // 🧠 Supabase Client Setup
 const supabase = createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY);
 
-// 🧠 History Memory Store
+// 👇 DATABASE HELPERS (Phase 2) 👇
+async function getCustomerState(jid) {
+    try {
+        const { data, error } = await supabase
+            .from('baileys_bot_states')
+            .select('*')
+            .eq('jid', jid)
+            .maybeSingle();
+        if (error) throw error;
+        return data || { last_reply_time: 0, paused_until: 0 };
+    } catch (err) {
+        console.error("Error fetching state:", err.message);
+        return { last_reply_time: 0, paused_until: 0 };
+    }
+}
+
+async function updateCustomerState(jid, lastReplyTime, pausedUntil = null) {
+    try {
+        let updateData = { jid: jid, last_reply_time: lastReplyTime };
+        if (pausedUntil !== null) updateData.paused_until = pausedUntil;
+        await supabase.from('baileys_bot_states').upsert(updateData);
+    } catch (err) {
+        console.error("Error updating state:", err.message);
+    }
+}
+// 👆 --------------------------------- 👆
+
 const chatHistories = new Map();
-const lastReplyTimes = new Map(); // Har customer ka timer track karne ke liye
+const sentNotifications = new Set(); // Duplicate notifications rokne ke liye
 
 function appendToHistory(jid, role, content) {
     if (!chatHistories.has(jid)) {
         chatHistories.set(jid, []);
     }
     const history = chatHistories.get(jid);
-    
     history.push({ role: role, content: content });
-
-    if (history.length > 12) {
-        history.shift(); 
-    }
+    if (history.length > 12) history.shift(); 
 }
 
 // ---------- WebSocket Dashboard ----------
@@ -61,33 +83,26 @@ wss.on('connection', (ws) => {
 });
 
 function broadcastStatus() {
-    wss.clients.forEach(client => {
-        client.send(JSON.stringify({ type: 'status', running: isBotRunning }));
-    });
+    wss.clients.forEach(client => client.send(JSON.stringify({ type: 'status', running: isBotRunning })));
 }
 
 function broadcastLog(message) {
     console.log(message);
-    wss.clients.forEach(client => {
-        client.send(JSON.stringify({ type: 'log', message }));
-    });
+    wss.clients.forEach(client => client.send(JSON.stringify({ type: 'log', message })));
 }
 
 app.use(express.static('dashboard'));
-app.get('/dashboard', (req, res) => {
-    res.sendFile(__dirname + '/dashboard/index.html');
-});
+app.get('/dashboard', (req, res) => res.sendFile(__dirname + '/dashboard/index.html'));
 
 server.listen(3000, () => {
     console.log('✅ Dashboard & QR server started on port 3000');
     appStarted = true;
-    broadcastLog('🚀 Bot server started and ready');   // 👈 add
+    broadcastLog('🚀 Bot server started and ready');
 });
 
-    async function startBot() {
+async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
-        // 🛡️ AntiBan Protection Layer (Fixed Config)
     const antiban = new AntiBan({
         maxPerMinute: 10,
         maxPerHour: 200,
@@ -97,59 +112,64 @@ server.listen(3000, () => {
         logging: true
     });
 
-        const sock = makeWASocket({
+    const sock = makeWASocket({
         auth: state,
         syncFullHistory: false
     });
      
     sock.antiban = antiban;
 
-    // QR via web
     sock.ev.on('connection.update', async (update) => {
         const { connection, qr, lastDisconnect } = update;
         if (qr) {
             console.log('Scan QR at http://localhost:3000/qr');
             const qrImage = await toDataURL(qr);
-            app.get('/qr', (req, res) => {
-                res.send(`<html><body><img src="${qrImage}" /></body></html>`);
-            });
-            
+            app.get('/qr', (req, res) => res.send(`<html><body><img src="${qrImage}" /></body></html>`));
         }
 
         if (connection === 'open') {
-            reconnectAttempts = 0;                             // 👈 add karein
+            reconnectAttempts = 0;
             console.log('✅ Bot connected to WhatsApp');
             setupOrderRealtimeListener(sock);
         } else if (connection === 'close') {
-    const statusCode = (lastDisconnect?.error)?.output?.statusCode;
-    const shouldReconnect = statusCode !== 401; // 401 means logged out
+            const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+            const shouldReconnect = statusCode !== 401;
 
-    if (shouldReconnect) {
-        reconnectAttempts++;
-        if (reconnectAttempts > 5) {
-            console.log('❌ Max reconnect attempts reached. Please check internet and restart manually.');
-            process.exit(1);
+            if (shouldReconnect) {
+                reconnectAttempts++;
+                if (reconnectAttempts > 5) {
+                    console.log('❌ Max reconnect attempts reached.');
+                    process.exit(1);
+                }
+                const delay = Math.floor(Math.random() * 5000) + 5000;
+                console.log(`⏳ Reconnecting in ${delay / 1000}s... (attempt ${reconnectAttempts})`);
+                setTimeout(() => startBot(), delay);
+            } else {
+                console.log('❌ Session logged out, clearing auth_info...');
+                fs.rmSync('auth_info', { recursive: true, force: true });
+                startBot();
+            }
         }
-        const delay = Math.floor(Math.random() * 5000) + 5000;
-        console.log(`⏳ Reconnecting in ${delay / 1000}s... (attempt ${reconnectAttempts})`);
-        setTimeout(() => startBot(), delay);
-    } else {
-        console.log('❌ Session logged out, clearing auth_info...');
-        fs.rmSync('auth_info', { recursive: true, force: true });
-        console.log('🔄 Restarting bot, QR scan required.');
-        startBot();
-    }
-}
     });
 
-    // Messages
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
-        console.log('\n--- NEW MESSAGE RECEIVED ---');
-        console.log('Type:', m.type, '| From Me:', msg.key.fromMe);
+        
+        // 👇 HUMAN TAKEOVER LOGIC (Owner Reply Pause) 👇
+        if (msg.key.fromMe && m.type === 'notify') {
+            const jid = msg.key.remoteJid;
+            if (!jid.endsWith('@g.us')) {
+                const pauseUntil = Date.now() + (120 * 60 * 1000); // 2 ghante
+                await updateCustomerState(jid, Date.now(), pauseUntil);
+                console.log(`✋ Owner replied manually. Bot paused for ${jid} for 2 hours.`);
+            }
+            return; 
+        }
+        // 👆 --------------------------------- 👆
 
         if (!msg.key.fromMe && m.type === 'notify') {
             const jid = msg.key.remoteJid;
+            console.log('\n--- NEW MESSAGE RECEIVED ---');
             console.log('1. JID:', jid);
 
             if (jid.endsWith('@g.us') || jid.includes('@broadcast') || jid.endsWith('@newsletter')) {
@@ -162,101 +182,57 @@ server.listen(3000, () => {
                 text = msg.message.conversation;
             } else if (msg.message?.extendedTextMessage?.text) {
                 text = msg.message.extendedTextMessage.text;
-            } else {
-                console.log('⚠️ MESSAGE JSON:', JSON.stringify(msg.message));
             }
 
-            console.log('2. Extracted Text:', text);
+            if (!text) return;
 
-            if (!text) {
-                console.log('❌ IGNORING: No text found in message.');
-                return;
-            }
-
-            console.log('3. Sending to handleIncomingMessage...');
-            
-                        handleIncomingMessage(jid, text, msg.key, async (combinedText, keys) => {
+            handleIncomingMessage(jid, text, msg.key, async (combinedText, keys) => {
                 if (!isBotRunning) {
                     broadcastLog(`⏸ Bot is paused, ignoring message from ${jid}`);
                     return;
                 }
                 console.log('✅ Debounce finished! Combined Text:', combinedText);
-                broadcastLog(`📩 Message from ${jid}: ${combinedText}`);
                 
-                // Night mode check
                 const nightAction = shouldNightReply(jid);
                 if (nightAction === true) {
                     await sendHumanLikeReply(sock, jid, config.NIGHT_REPLY_TEXT, keys, true);
-                    broadcastLog(`📤 Night auto-reply sent to ${jid}`);
                     return;
-
-                                } else if (nightAction === false) {
-                    // 👇 NAYA CODE: Read, Type, aur Pause (Insaan jaisa behavior) 👇
-                    await sock.readMessages(keys); // 👈 keys array use karein // Blue Tick
-                    await sock.sendPresenceUpdate('composing', jid); // Typing shuru
-                    await new Promise(r => setTimeout(r, 3000)); // 3 second wait
-                    await sock.sendPresenceUpdate('paused', jid); // Typing band (cancel)
-                    console.log(`🌙 Night mode: Read + Typing shown, but ignored.`);
+                } else if (nightAction === false) {
+                    await sock.readMessages(keys);
+                    await sock.sendPresenceUpdate('composing', jid);
+                    await new Promise(r => setTimeout(r, 3000));
+                    await sock.sendPresenceUpdate('paused', jid);
                     return;
                 }
 
-                // ========== ORDER STATUS FETCH (by JID) ==========
-let finalMessage = combinedText;
-try {
-    const { data: latestOrder } = await supabase
-        .from('orders')
-        .select('status, dc_amount, rider_status, area')
-        .eq('chat_jid', jid)                  // 👈 directly match by JID
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-    if (latestOrder) {
-        finalMessage = `[SYSTEM ORDER CONTEXT]\nStatus: ${latestOrder.status}\nRider Status: ${latestOrder.rider_status || 'N/A'}\nDelivery Fee: Rs. ${latestOrder.dc_amount || 0}\nArea: ${latestOrder.area || 'N/A'}\n\nCUSTOMER'S QUESTION: ${combinedText}`;
-        console.log('📦 Order context added for AI');
-    } else {
-        console.log('ℹ️ No existing order found for this user (JID).');
-    }
-} catch (e) {
-    console.error('❌ Failed to fetch order status:', e);
-}
-// =========================================================
-
-                                // ===== AI COMMENTED OUT =====
-                // appendToHistory(jid, 'user', combinedText);
-                // let aiReply;
-                // try {
-                //     aiReply = await getAIResponse(jid, finalMessage);
-                //     console.log('🤖 AI Reply ready:', aiReply);
-                // } catch (err) {
-                //     console.error('❌ AI Error:', err);
-                //     aiReply = 'Sorry, error getting reply';
-                // }
-
-                const shouldRead = true;
-                                // ===== TIMER (COOLDOWN) CHECK =====
+                // ===== TIMER (COOLDOWN) CHECK WITH DATABASE =====
                 const cooldownMs = config.REPLY_COOLDOWN_MINUTES * 60 * 1000;
-                const lastTime = lastReplyTimes.get(jid) || 0;
                 const now = Date.now();
+                
+                const state = await getCustomerState(jid);
+                const lastTime = state.last_reply_time || 0;
+                const pausedUntil = state.paused_until || 0;
 
-                                // Agar timer khatam nahi hua, to reply na bhejein
-                if (now - lastTime < cooldownMs) {
-                    // 👇 NAYA CODE: Read, Type, aur Pause (Insaan jaisa behavior) 👇
-                    await sock.readMessages(keys); // Blue Tick
-                    await sock.sendPresenceUpdate('composing', jid); // Typing shuru
-                    await new Promise(r => setTimeout(r, 3000)); // 3 second wait
-                    await sock.sendPresenceUpdate('paused', jid); // Typing band (cancel)
-                    console.log(`⏳ Cooldown active for ${jid}. Read + Typing shown, ignored.`);
+                // Check Human Takeover
+                if (pausedUntil > now) {
+                    console.log(`✋ Owner is chatting. Bot paused for ${jid}.`);
+                    await sock.readMessages(keys); 
                     return;
                 }
 
-                // Timer update karein (taake agle 30 min tak dobara reply na jaye)
-                lastReplyTimes.set(jid, now);
-
-                // 👇 YEH NAYI LINES ADD KAREIN (Blue tick ke liye) 👇
-                if (shouldRead && keys) {
-                    await sock.readMessages(keys); 
+                // Check Cooldown
+                if (now - lastTime < cooldownMs) {
+                    await sock.readMessages(keys);
+                    await sock.sendPresenceUpdate('composing', jid);
+                    await new Promise(r => setTimeout(r, 3000));
+                    await sock.sendPresenceUpdate('paused', jid);
+                    console.log(`⏳ Cooldown active for ${jid}. Ignored.`);
+                    return;
                 }
+
+                // Update Database Timer
+                await updateCustomerState(jid, now);
+                const shouldRead = true;
 
                 // ===== BUTTON REPLY LOGIC =====
                 const buttonData = {
@@ -268,14 +244,18 @@ try {
                             name: 'cta_url',
                             buttonParamsJson: JSON.stringify({
                                 display_text: '🌐 Web App Kholain',
-                                url: 'https://waseemakramkhan126-max.github.io/faster-v2/new-order.html' // 👈 Yahan apna link dalein
+                                url: 'https://waseemakramkhan126-max.github.io/faster-v2/new-order.html'
                             })
                         }
                     ]
                 };
 
+                if (shouldRead && keys) {
+                    await sock.readMessages(keys); 
+                }
+
                 console.log('4. Sending button reply to WhatsApp...');
-                                await sendButtonReply(sock, jid, buttonData, keys, shouldRead); // 👈 keys pass karein
+                await sendButtonReply(sock, jid, buttonData, keys, shouldRead); 
                 broadcastLog(`📤 Button reply sent to ${jid}`);
             });
         }
@@ -284,89 +264,9 @@ try {
     sock.ev.on('creds.update', saveCreds);
 }
 
-async function getAIResponse(jid, message) {
-    try {
-        const supabaseUrl = config.AI_ENDPOINT;
-        const existingHistory = chatHistories.get(jid) || [];
-
-        const response = await fetch(supabaseUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ 
-                message: message,
-                history: existingHistory,
-                jid: jid                  // 👈 comma pehle laga ke add kiya
-            }),                            // 👈 object close, comma, parentheses close
-        });
-
-        if (!response.ok) {
-            
-            throw new Error(`Supabase Error: ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        const aiReply = data.reply || data.message || data.text || JSON.stringify(data);
-        
-        appendToHistory(jid, 'model', aiReply);
-        return aiReply;
-    } catch (err) {
-        console.error('❌ AI API Error:', err.message);
-        return 'Sorry, AI service is not available right now.';
-    }
-}
-
-// Phone number ko valid WhatsApp JID mein convert karne ka helper
-function formatToJid(phone) {
-    if (!phone) return null;
-    let clean = phone.replace(/[^0-9]/g, ''); // Sirf digits rakhein
-    
-    // Agar 0300... hai to 92300... karein
-    if (clean.startsWith('0')) {
-        clean = '92' + clean.slice(1);
-    }
-    // Agar 300... (10 digits) hai to 92300... karein
-    else if (clean.length === 10 && clean.startsWith('3')) {
-        clean = '92' + clean;
-    }
-
-    return clean.endsWith('@s.whatsapp.net') ? clean : `${clean}@s.whatsapp.net`;
-}
-
-// Wallet balance helper (tries both 92... and 03... formats)
-async function getWalletBalance(phone) {
-    if (!phone) return 0;
-    let phone92 = phone.trim();
-    if (phone92.startsWith('0')) {
-        phone92 = '92' + phone92.slice(1);
-    }
-    let phone03 = phone92.startsWith('92') && phone92.length >= 11 ? '0' + phone92.slice(2) : phone92;
-
-    try {
-        const { data, error } = await supabase
-            .from("wallets")
-            .select("current_balance, customer_phone")
-            .or(`customer_phone.eq.${phone92},customer_phone.eq.${phone03}`)
-            .maybeSingle();
-
-        console.log(`🔍 Wallet lookup for phone92=${phone92} / phone03=${phone03} →`, data, error);
-
-        if (data) {
-            return Number(data.current_balance) || 0;
-        }
-    } catch (e) {
-        console.error("Wallet fetch error:", e);
-    }
-    return 0;
-}
-
-// -----------------------------------------------------------------------------
-// 📡 REALTIME ORDERS TABLE LISTENER (Rider Status & Bill Updates)
-// -----------------------------------------------------------------------------
+// (Order Notifications wala hissa waise hi rahega, hum ise Phase 3 mein update karenge)
 function setupOrderRealtimeListener(sock) {
     console.log('📡 Listening for Realtime updates on "orders" table...');
-
     const channelName = `realtime-orders-${Date.now()}`;
 
     supabase
@@ -377,9 +277,6 @@ function setupOrderRealtimeListener(sock) {
             async (payload) => {
                 const oldRow = payload.old || {};
                 const newRow = payload.new || {};
-
-                console.log(`🔔 Order Update Detected for Order ID: ${newRow.id}`);
-
                 const jid = formatToJid(newRow.customer_phone);
                 if (!jid) return;
 
@@ -390,9 +287,17 @@ function setupOrderRealtimeListener(sock) {
                 const isBillUploaded = newRow.bill_image && (newRow.bill_image !== oldRow.bill_image || newRow.bill_amount !== oldRow.bill_amount);
                 const isRiderOnWay = (currentStatus === 'on_the_way' || currentStatus === 'ontheway' || currentStatus === 'on the way') && statusChanged;
 
+                // 👇 DUPLICATE CHECK LOGIC 👇
+                const uniqueKey = `${newRow.id}_${currentStatus}_${newRow.bill_image || ''}`;
+                if (sentNotifications.has(uniqueKey)) {
+                    console.log(`⚠️ Duplicate notification blocked for Order ${newRow.id}`);
+                    return; 
+                }
+                sentNotifications.add(uniqueKey);
+                // 👆 ------------------- 👆
+
                 if (isBillUploaded || isRiderOnWay) {
                     const billAmt = (Number(newRow.item_price) || 0) + (Number(newRow.dc_amount) || 0);
-
                     let walletBalance = await getWalletBalance(newRow.customer_phone);
 
                     let captionText = `📄 *Order Bill Details*\n\n`;
@@ -411,34 +316,30 @@ function setupOrderRealtimeListener(sock) {
                     captionText += `*Total Payable: Rs. ${totalPayable}*\n\n`;
                     captionText += `*Rider is on the way 🏍️*`;
 
-                    try {
-                        if (newRow.bill_image) {
-                            await sock.sendMessage(jid, {
-                                image: { url: newRow.bill_image },
-                                caption: captionText
-                            });
-                        } else {
-                            await sock.sendMessage(jid, { text: captionText });
-                        }
+                    // 👇 FIXED: Ab check hoga ke message gaya ya AntiBan ne roka
+                    let sent = false;
+                    if (newRow.bill_image) {
+                        sent = await sendHumanLikeImage(sock, jid, newRow.bill_image, captionText, null, false);
+                    } else {
+                        sent = await sendHumanLikeReply(sock, jid, captionText, null, false);
+                    }
+                    
+                    if (sent !== false) {
                         console.log(`✅ Bill & On-The-Way details sent to ${jid}`);
-                    } catch (err) {
-                        console.error('❌ Failed to send bill details:', err);
                     }
                 }
 
-                if (currentStatus === 'arrived') {
+                if (currentStatus === 'arrived' && statusChanged) {
                     const arrivedMsg = `*Your order has arrived 🏠*\nPlease receive your order.`;
-                    try {
-                        await sock.sendMessage(jid, { text: arrivedMsg });
+                    const sent = await sendHumanLikeReply(sock, jid, arrivedMsg, null, false);
+                    
+                    if (sent !== false) {
                         console.log(`✅ Arrived message sent to ${jid}`);
-                    } catch (err) {
-                        console.error('❌ Failed to send arrived message:', err);
                     }
                 }
 
-                if (currentStatus === 'delivered' || currentStatus === 'completed') {
+                if ((currentStatus === 'delivered' || currentStatus === 'completed') && statusChanged) {
                     let deliveredMsg = `*✅Order Completed:*\nThank you for choosing Faster, We appreciate your trust in our services.`;
-
                     let walletBalance = await getWalletBalance(newRow.customer_phone);
 
                     if (walletBalance > 0) {
@@ -446,17 +347,40 @@ function setupOrderRealtimeListener(sock) {
                     } else if (walletBalance < 0) {
                         deliveredMsg += `\n\n*Remaining Amount :* Rs. ${Math.abs(walletBalance)}`;
                     }
-
-                    try {
-                        await sock.sendMessage(jid, { text: deliveredMsg });
+                    const sent = await sendHumanLikeReply(sock, jid, deliveredMsg, null, false);
+                    
+                    if (sent !== false) {
                         console.log(`✅ Delivered message sent to ${jid}`);
-                    } catch (err) {
-                        console.error('❌ Failed to send delivered message:', err);
                     }
                 }
             }
         )
         .subscribe();
+}
+
+function formatToJid(phone) {
+    if (!phone) return null;
+    let clean = phone.replace(/[^0-9]/g, '');
+    if (clean.startsWith('0')) clean = '92' + clean.slice(1);
+    else if (clean.length === 10 && clean.startsWith('3')) clean = '92' + clean;
+    return clean.endsWith('@s.whatsapp.net') ? clean : `${clean}@s.whatsapp.net`;
+}
+
+async function getWalletBalance(phone) {
+    if (!phone) return 0;
+    let phone92 = phone.trim();
+    if (phone92.startsWith('0')) phone92 = '92' + phone92.slice(1);
+    let phone03 = phone92.startsWith('92') && phone92.length >= 11 ? '0' + phone92.slice(2) : phone92;
+
+    try {
+        const { data, error } = await supabase
+            .from("wallets")
+            .select("current_balance, customer_phone")
+            .or(`customer_phone.eq.${phone92},customer_phone.eq.${phone03}`)
+            .maybeSingle();
+        if (data) return Number(data.current_balance) || 0;
+    } catch (e) { console.error(e); }
+    return 0;
 }
 
 startBot();
