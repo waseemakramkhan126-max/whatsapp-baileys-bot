@@ -1,30 +1,44 @@
 const config = require('./config');
 
-const queue = [];
+const highPriorityQueue = []; // Order Notifications ke liye
+const normalQueue = [];       // Customer Replies ke liye
 let isProcessing = false;
 
-/**
- * Ek task (function) queue mein add karta hai. Jab turn aaye execute hota hai.
- * Random delay baad agli task process hoti hai.
- */
-async function addToQueue(taskFn) {
+async function addToQueue(taskFn, isPriority = false) {
     return new Promise((resolve, reject) => {
-        queue.push({ taskFn, resolve, reject });
+        if (isPriority) {
+            highPriorityQueue.push({ taskFn, resolve, reject });
+        } else {
+            normalQueue.push({ taskFn, resolve, reject });
+        }
         processQueue();
     });
 }
 
 async function processQueue() {
-    if (isProcessing || queue.length === 0) return;
+    if (isProcessing) return;
     isProcessing = true;
-    const { taskFn, resolve, reject } = queue.shift();
-    try {
-        const result = await taskFn();
-        resolve(result);
-    } catch (err) {
-        reject(err);
+
+    // 👇 Pehle VIP (Notification) check karein
+    let task = highPriorityQueue.shift();
+    
+    // Agar VIP khali hai, to Normal (Customer) uthayein
+    if (!task) {
+        task = normalQueue.shift();
     }
-    // Random delay before next message dispatch
+
+    if (!task) {
+        isProcessing = false;
+        return;
+    }
+
+    try {
+        const result = await task.taskFn();
+        task.resolve(result);
+    } catch (err) {
+        task.reject(err);
+    }
+
     const delay = config.INTER_MESSAGE_DELAY();
     setTimeout(() => {
         isProcessing = false;

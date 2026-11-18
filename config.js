@@ -1,39 +1,25 @@
 require('dotenv').config();
 
 module.exports = {
-    // Phase 1: Debounce
-    DEBOUNCE_TIME: 3000,
-
-    // Phase 2: Queue & Rate Limiting
-    INTER_MESSAGE_DELAY: () => Math.random() * 1700 + 800,
-    DAILY_MSG_CAP: 150,
-
-    // Phase 3: Human-like Reply
-    SMART_DELAY: () => Math.random() * 3000 + 1000,
+    DEBOUNCE_TIME: 3000, 
+    INTER_MESSAGE_DELAY: () => Math.random() * 500 + 200, // 0.2 - 0.7 sec (Fast queue movement)
+    
+    // 👇 Delay kam kar diya taake naya customer foran reply paye
+    SMART_DELAY: () => Math.random() * 1000 + 1000, // 1-2 sec
     SHORT_TEXT_THRESHOLD: 50,
     LONG_TEXT_THRESHOLD: 100,
-    SHORT_TYPING_TIME: () => Math.random() * 1000 + 2000,
-    LONG_TYPING_TIME: () => Math.random() * 2000 + 3000,
+    SHORT_TYPING_TIME: () => Math.random() * 500 + 1000, // 1-1.5 sec
+    LONG_TYPING_TIME: () => Math.random() * 1000 + 1500,  // 1.5-2.5 sec
 
-    // Phase 4: Dead-end keywords
-    DEAD_END_KEYWORDS: ['ok', 'thanks', 'thank you', '👍', '🙏', 'shukriya', 'thik hai'],
+    DEAD_END_KEYWORDS: ['ok', 'okay', 'okei', 'theek hai', 'thik hai', 'thanks', 'thank you', 'shukriya', 'nice service', '👍', '🙏', '😊', '❤️'],
 
-    // Phase 5: Chunking
     CHUNK_SIZE: 200,
     CHUNK_GAP: 1500,
-
-    // Phase 6: Night Mode
     NIGHT_START_HOUR: 0,
     NIGHT_END_HOUR: 8,
     NIGHT_REPLY_TEXT: "Maaf kijiye, hamari service abhi band hai. Subah 8 baje open hogi.",
-    
-    // Auto-reply timer (minutes mein)
     REPLY_COOLDOWN_MINUTES: 30, 
-
-    // AI Endpoint
     AI_ENDPOINT: 'https://hkabhikizdlbavfkualt.supabase.co/functions/v1/chat-brain',
-    
-    // Supabase Credentials (loaded from .env)
     SUPABASE_URL: process.env.SUPABASE_URL,
     SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY
 };

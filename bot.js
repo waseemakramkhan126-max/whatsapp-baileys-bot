@@ -18,10 +18,8 @@ let appStarted = false;
 let reconnectAttempts = 0;
 let isBotRunning = true;
 
-// 🧠 Supabase Client Setup
 const supabase = createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY);
 
-// 👇 DATABASE HELPERS (Phase 2) 👇
 async function getCustomerState(jid) {
     try {
         const { data, error } = await supabase
@@ -46,21 +44,17 @@ async function updateCustomerState(jid, lastReplyTime, pausedUntil = null) {
         console.error("Error updating state:", err.message);
     }
 }
-// 👆 --------------------------------- 👆
 
 const chatHistories = new Map();
-const sentNotifications = new Set(); // Duplicate notifications rokne ke liye
+const sentNotifications = new Set();
 
 function appendToHistory(jid, role, content) {
-    if (!chatHistories.has(jid)) {
-        chatHistories.set(jid, []);
-    }
+    if (!chatHistories.has(jid)) chatHistories.set(jid, []);
     const history = chatHistories.get(jid);
     history.push({ role: role, content: content });
     if (history.length > 12) history.shift(); 
 }
 
-// ---------- WebSocket Dashboard ----------
 wss.on('connection', (ws) => {
     ws.send(JSON.stringify({ type: 'status', running: isBotRunning }));
     ws.send(JSON.stringify({ type: 'log', message: '🔌 Dashboard connected to bot server' }));
@@ -103,11 +97,11 @@ server.listen(3000, () => {
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
-    const antiban = new AntiBan({
-        maxPerMinute: 10,
-        maxPerHour: 200,
-        warmupDays: 7,
-        day1Limit: 20,
+        const antiban = new AntiBan({
+        maxPerMinute: 20, // 👈 10 se barha kar 20 kar diya (Number purana hai)
+        maxPerHour: 300,  // 👈 200 se barha kar 300 kar diya
+        warmupDays: 0,    // 👈 7 se 0 kar diya (Kyunke number purana hai)
+        day1Limit: 500,
         growthFactor: 1.8,
         logging: true
     });
@@ -155,17 +149,15 @@ async function startBot() {
     sock.ev.on('messages.upsert', async (m) => {
         const msg = m.messages[0];
         
-        // 👇 HUMAN TAKEOVER LOGIC (Owner Reply Pause) 👇
         if (msg.key.fromMe && m.type === 'notify') {
             const jid = msg.key.remoteJid;
             if (!jid.endsWith('@g.us')) {
-                const pauseUntil = Date.now() + (120 * 60 * 1000); // 2 ghante
+                const pauseUntil = Date.now() + (120 * 60 * 1000); 
                 await updateCustomerState(jid, Date.now(), pauseUntil);
                 console.log(`✋ Owner replied manually. Bot paused for ${jid} for 2 hours.`);
             }
             return; 
         }
-        // 👆 --------------------------------- 👆
 
         if (!msg.key.fromMe && m.type === 'notify') {
             const jid = msg.key.remoteJid;
@@ -205,6 +197,45 @@ async function startBot() {
                     return;
                 }
 
+                // 👇 ===== SMART ORDER STATUS CHECK ===== 👇
+                const { data: latestOrder } = await supabase
+                    .from('orders')
+                    .select('status')
+                    .eq('chat_jid', jid)
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
+
+                let isOrderActive = false;
+                let isOrderCompleted = false;
+
+                if (latestOrder) {
+                    if (latestOrder.status === 'completed' || latestOrder.status === 'delivered') {
+                        isOrderCompleted = true;
+                    } else {
+                        isOrderActive = true;
+                    }
+                }
+
+                const lowerText = combinedText.toLowerCase().trim();
+                const isDeadEnd = config.DEAD_END_KEYWORDS.some(kw => lowerText.includes(kw));
+
+                                // 1. Completed order + Dead-end
+                if (isOrderCompleted && isDeadEnd) {
+                    console.log(`⏳ Completed order & Dead-end. Ignoring.`);
+                    await sock.readMessages(keys);
+                    return;
+                }
+
+                // 2. 👇 Active Order Logic: Owner khud reply karega
+                if (isOrderActive && !isDeadEnd) {
+                    console.log(`ℹ️ Active Order detected. Bot staying silent for owner.`);
+                    await sock.readMessages(keys); // Sirf blue tick lagegi
+                    return; // Bot yahan ruk jayega, owner manually reply karega
+                }
+                // 👆 ===================================== 👆
+
+
                 // ===== TIMER (COOLDOWN) CHECK WITH DATABASE =====
                 const cooldownMs = config.REPLY_COOLDOWN_MINUTES * 60 * 1000;
                 const now = Date.now();
@@ -213,14 +244,12 @@ async function startBot() {
                 const lastTime = state.last_reply_time || 0;
                 const pausedUntil = state.paused_until || 0;
 
-                // Check Human Takeover
                 if (pausedUntil > now) {
                     console.log(`✋ Owner is chatting. Bot paused for ${jid}.`);
                     await sock.readMessages(keys); 
                     return;
                 }
 
-                // Check Cooldown
                 if (now - lastTime < cooldownMs) {
                     await sock.readMessages(keys);
                     await sock.sendPresenceUpdate('composing', jid);
@@ -230,11 +259,9 @@ async function startBot() {
                     return;
                 }
 
-                // Update Database Timer
                 await updateCustomerState(jid, now);
                 const shouldRead = true;
 
-                // ===== BUTTON REPLY LOGIC =====
                 const buttonData = {
                     title: 'Aapka Swagat Hai!',
                     text: 'Humse raabta karne ke liye neeche diye gaye button par click karein.',
@@ -250,9 +277,7 @@ async function startBot() {
                     ]
                 };
 
-                if (shouldRead && keys) {
-                    await sock.readMessages(keys); 
-                }
+                if (shouldRead && keys) await sock.readMessages(keys); 
 
                 console.log('4. Sending button reply to WhatsApp...');
                 await sendButtonReply(sock, jid, buttonData, keys, shouldRead); 
@@ -264,7 +289,6 @@ async function startBot() {
     sock.ev.on('creds.update', saveCreds);
 }
 
-// (Order Notifications wala hissa waise hi rahega, hum ise Phase 3 mein update karenge)
 function setupOrderRealtimeListener(sock) {
     console.log('📡 Listening for Realtime updates on "orders" table...');
     const channelName = `realtime-orders-${Date.now()}`;
@@ -287,69 +311,78 @@ function setupOrderRealtimeListener(sock) {
                 const isBillUploaded = newRow.bill_image && (newRow.bill_image !== oldRow.bill_image || newRow.bill_amount !== oldRow.bill_amount);
                 const isRiderOnWay = (currentStatus === 'on_the_way' || currentStatus === 'ontheway' || currentStatus === 'on the way') && statusChanged;
 
-                // 👇 DUPLICATE CHECK LOGIC 👇
                 const uniqueKey = `${newRow.id}_${currentStatus}_${newRow.bill_image || ''}`;
                 if (sentNotifications.has(uniqueKey)) {
                     console.log(`⚠️ Duplicate notification blocked for Order ${newRow.id}`);
                     return; 
                 }
                 sentNotifications.add(uniqueKey);
-                // 👆 ------------------- 👆
 
                 if (isBillUploaded || isRiderOnWay) {
                     const billAmt = (Number(newRow.item_price) || 0) + (Number(newRow.dc_amount) || 0);
-                    let walletBalance = await getWalletBalance(newRow.customer_phone);
+                    
+                    const rawWalletBalance = await getWalletBalance(newRow.customer_phone);
+                    const walletBalance = Number(rawWalletBalance) || 0;
 
                     let captionText = `📄 *Order Bill Details*\n\n`;
                     captionText += `Bill Amount: Rs. ${billAmt}\n`;
 
                     let totalPayable = billAmt;
+
                     if (walletBalance > 0) {
                         captionText += `Previous Due: Rs. ${walletBalance}\n`;
                         totalPayable = billAmt + walletBalance;
                     } else if (walletBalance < 0) {
-                        captionText += `Remaining Amount: Rs. ${Math.abs(walletBalance)}\n`;
-                        totalPayable = billAmt + walletBalance;
+                        captionText += `Your Remaining Amount: Rs. ${Math.abs(walletBalance)}\n`;
+                        totalPayable = billAmt + walletBalance; 
                     }
 
-                    captionText += `---------------------------\n`;
-                    captionText += `*Total Payable: Rs. ${totalPayable}*\n\n`;
+                    captionText += `----------------------\n`;
+                    captionText += `*Total Payable: Rs. ${totalPayable}/-*\n\n`;
                     captionText += `*Rider is on the way 🏍️*`;
 
-                    // 👇 FIXED: Ab check hoga ke message gaya ya AntiBan ne roka
-                    let sent = false;
+                    let sentBill = false;
+                    // 👇 Yahan 'true' pass kiya hai (Notification Delay ke liye)
                     if (newRow.bill_image) {
-                        sent = await sendHumanLikeImage(sock, jid, newRow.bill_image, captionText, null, false);
+                        sentBill = await sendHumanLikeImage(sock, jid, newRow.bill_image, captionText, null, false, true);
                     } else {
-                        sent = await sendHumanLikeReply(sock, jid, captionText, null, false);
+                        sentBill = await sendHumanLikeReply(sock, jid, captionText, null, false, true);
                     }
                     
-                    if (sent !== false) {
+                    if (sentBill !== false) {
                         console.log(`✅ Bill & On-The-Way details sent to ${jid}`);
                     }
                 }
 
                 if (currentStatus === 'arrived' && statusChanged) {
                     const arrivedMsg = `*Your order has arrived 🏠*\nPlease receive your order.`;
-                    const sent = await sendHumanLikeReply(sock, jid, arrivedMsg, null, false);
+                    // 👇 Yahan 'true' pass kiya hai
+                    const sentArrived = await sendHumanLikeReply(sock, jid, arrivedMsg, null, false, true);
                     
-                    if (sent !== false) {
+                    if (sentArrived !== false) {
                         console.log(`✅ Arrived message sent to ${jid}`);
                     }
                 }
 
                 if ((currentStatus === 'delivered' || currentStatus === 'completed') && statusChanged) {
-                    let deliveredMsg = `*✅Order Completed:*\nThank you for choosing Faster, We appreciate your trust in our services.`;
-                    let walletBalance = await getWalletBalance(newRow.customer_phone);
+                    const billAmount = Number(newRow.bill_amount) || 0;
+                    const balanceAmt = Number(newRow.balance_amount) || 0;
+                    const paidToRider = billAmount - balanceAmt;
 
-                    if (walletBalance > 0) {
-                        deliveredMsg += `\n\n*Pending Amount:* Rs. ${walletBalance}`;
-                    } else if (walletBalance < 0) {
-                        deliveredMsg += `\n\n*Remaining Amount :* Rs. ${Math.abs(walletBalance)}`;
+                    let deliveredMsg = "";
+
+                    if (balanceAmt > 0) {
+                        deliveredMsg = `Total Bill: Rs. *${billAmount}*\nPaid To Rider: Rs. ${paidToRider}\n⚠️ Your Pending Amount: Rs. *${balanceAmt}*\n\n*✅ Order Completed:*\nThank you for choosing Faster, we appreciate your trust in our services.`;
+                    } else if (balanceAmt < 0) {
+                        deliveredMsg = `Total Bill: Rs. *${billAmount}*\nPaid To Rider: Rs. *${paidToRider}*\n⚠️ Your Remaining Amount: Rs. *${Math.abs(balanceAmt)}*\n\n*✅ Order Completed:*\nThank you for choosing Faster, we appreciate your trust in our services.`;
+                    } else {
+                        deliveredMsg = `*✅ Order Completed:*\nThank you for choosing Faster, we appreciate your trust in our services.`;
                     }
-                    const sent = await sendHumanLikeReply(sock, jid, deliveredMsg, null, false);
+
+                    // 👇 Yahan 'true' pass kiya hai
+                    const sentDelivered = await sendHumanLikeReply(sock, jid, deliveredMsg, null, false, true);
                     
-                    if (sent !== false) {
+                    if (sentDelivered !== false) {
                         console.log(`✅ Delivered message sent to ${jid}`);
                     }
                 }
@@ -368,19 +401,37 @@ function formatToJid(phone) {
 
 async function getWalletBalance(phone) {
     if (!phone) return 0;
-    let phone92 = phone.trim();
-    if (phone92.startsWith('0')) phone92 = '92' + phone92.slice(1);
-    let phone03 = phone92.startsWith('92') && phone92.length >= 11 ? '0' + phone92.slice(2) : phone92;
+    
+    let cleanPhone = phone.replace(/[^0-9]/g, '');
+    let core10 = cleanPhone;
+    if (core10.startsWith('92') && core10.length > 10) core10 = core10.slice(2); 
+    if (core10.startsWith('0')) core10 = core10.slice(1); 
 
     try {
         const { data, error } = await supabase
             .from("wallets")
             .select("current_balance, customer_phone")
-            .or(`customer_phone.eq.${phone92},customer_phone.eq.${phone03}`)
+            .like('customer_phone', `%${core10}%`)
             .maybeSingle();
-        if (data) return Number(data.current_balance) || 0;
-    } catch (e) { console.error(e); }
-    return 0;
+
+        console.log(`🔍 Wallet Check -> Searching for core digits: %${core10}%`);
+        
+        if (error) {
+            console.error(`❌ Wallet DB Error:`, error.message);
+            return 0;
+        }
+
+        if (data) {
+            console.log(`✅ Wallet Found! Saved as: [${data.customer_phone}], Balance: Rs. ${data.current_balance}`);
+            return Number(data.current_balance) || 0;
+        } else {
+            console.log(`⚠️ No wallet record found for core digits: ${core10}`);
+            return 0;
+        }
+    } catch (e) {
+        console.error("❌ Wallet Exception:", e);
+        return 0;
+    }
 }
 
 startBot();
