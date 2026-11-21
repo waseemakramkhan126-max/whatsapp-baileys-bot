@@ -8,7 +8,6 @@ const { createClient } = require('@supabase/supabase-js');
 const { AntiBan } = require('baileys-antiban');
 const { handleIncomingMessage } = require('./debounce');
 const { sendHumanLikeReply, sendButtonReply, sendHumanLikeImage } = require('./sender');
-const { shouldNightReply } = require('./nightmode');
 const config = require('./config');
 
 const app = express();
@@ -185,27 +184,64 @@ async function startBot() {
                 }
                 console.log('✅ Debounce finished! Combined Text:', combinedText);
                 
-                const nightAction = shouldNightReply(jid);
-                if (nightAction === true) {
-                    await sendHumanLikeReply(sock, jid, config.NIGHT_REPLY_TEXT, keys, true);
-                    return;
-                } else if (nightAction === false) {
-                    await sock.readMessages(keys);
-                    await sock.sendPresenceUpdate('composing', jid);
-                    await new Promise(r => setTimeout(r, 3000));
-                    await sock.sendPresenceUpdate('paused', jid);
-                    return;
-                }
-
-                // 👇 ===== SMART ORDER STATUS CHECK ===== 👇
+                                // ===== 1. AREA AUR ORDER STATUS CHECK =====
                 const { data: latestOrder } = await supabase
                     .from('orders')
-                    .select('status')
+                    .select('status, area')
                     .eq('chat_jid', jid)
                     .order('created_at', { ascending: false })
                     .limit(1)
                     .maybeSingle();
 
+                let storeOpenHour = 8;  // Default (Subah 8 baje)
+                let storeCloseHour = 23; // Default (Raat 11 baje)
+
+                // Agar customer ka area mil jaye, to us area ki timing le lein
+                if (latestOrder && latestOrder.area) {
+                    const { data: areaData } = await supabase
+                        .from('delivery_areas')
+                        .select('open_hour, close_hour')
+                        .ilike('area_name', latestOrder.area) // area_name se match kiya
+                        .maybeSingle();
+
+                    if (areaData) {
+                        // '08:00' jaisi string ko 8 mein convert karne ke liye split kar rahe hain
+                        if (areaData.open_hour) storeOpenHour = parseInt(areaData.open_hour.split(':')[0], 10);
+                        if (areaData.close_hour) storeCloseHour = parseInt(areaData.close_hour.split(':')[0], 10);
+                    }
+                }
+
+                // ===== 2. PAKISTAN TIME CHECK =====
+                const pkTime = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Karachi" }));
+                const currentHour = pkTime.getHours();
+                
+                let isStoreOpen = false;
+                if (storeOpenHour < storeCloseHour) {
+                    // Agar timing normal hai (jaise 8 AM se 11 PM)
+                    isStoreOpen = currentHour >= storeOpenHour && currentHour < storeCloseHour;
+                } else {
+                    // Agar timing raat cross karti hai (jaise 6 PM se 2 AM)
+                    isStoreOpen = currentHour >= storeOpenHour || currentHour < storeCloseHour;
+                }
+
+                // ===== 3. AGAR STORE BAND HAI =====
+                if (!isStoreOpen) {
+                    const todayDate = new Date().toDateString();
+                    // Memory mein check karein ke aaj raat ka message bheja ja chuka hai ya nahi
+                    if (!global.nightRepliedMap) global.nightRepliedMap = new Map();
+
+                    if (global.nightRepliedMap.get(jid) !== todayDate) {
+                        await sendHumanLikeReply(sock, jid, config.NIGHT_REPLY_TEXT, keys, true);
+                        global.nightRepliedMap.set(jid, todayDate); // Save kar lein ke aaj reply bhej diya
+                        console.log(`🌙 Store closed for ${latestOrder?.area || 'Default'}. Night reply sent.`);
+                    } else {
+                        await sock.readMessages(keys);
+                        console.log(`🌙 Store closed. Night reply already sent today. Ignoring.`);
+                    }
+                    return; // Yahan se aage na barhein
+                }
+
+                // ===== 4. AGAR STORE OPEN HAI (Order Status Logic) =====
                 let isOrderActive = false;
                 let isOrderCompleted = false;
 
@@ -220,21 +256,20 @@ async function startBot() {
                 const lowerText = combinedText.toLowerCase().trim();
                 const isDeadEnd = config.DEAD_END_KEYWORDS.some(kw => lowerText.includes(kw));
 
-                                // 1. Completed order + Dead-end
+                // 4a. Completed order + Dead-end (Ignore)
                 if (isOrderCompleted && isDeadEnd) {
                     console.log(`⏳ Completed order & Dead-end. Ignoring.`);
                     await sock.readMessages(keys);
                     return;
                 }
 
-                // 2. 👇 Active Order Logic: Owner khud reply karega
+                // 4b. Active Order (Owner reply karega)
                 if (isOrderActive && !isDeadEnd) {
                     console.log(`ℹ️ Active Order detected. Bot staying silent for owner.`);
-                    await sock.readMessages(keys); // Sirf blue tick lagegi
-                    return; // Bot yahan ruk jayega, owner manually reply karega
+                    await sock.readMessages(keys); 
+                    return; 
                 }
-                // 👆 ===================================== 👆
-
+                // =====================================
 
                 // ===== TIMER (COOLDOWN) CHECK WITH DATABASE =====
                 const cooldownMs = config.REPLY_COOLDOWN_MINUTES * 60 * 1000;
