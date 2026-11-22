@@ -332,117 +332,133 @@ function setupOrderRealtimeListener(sock) {
         .channel(channelName)
         .on(
             'postgres_changes',
-            { event: 'UPDATE', schema: 'public', table: 'orders' },
+            { event: '*', schema: 'public', table: 'orders' }, // 👈 '*' lagaya hai taake INSERT aur UPDATE dono sune
             async (payload) => {
-                const oldRow = payload.old || {};
                 const newRow = payload.new || {};
+                const oldRow = payload.old || {};
                 const jid = formatToJid(newRow.customer_phone);
                 if (!jid) return;
 
-                const currentStatus = String(newRow.rider_status || '').toLowerCase().trim();
-                const oldStatus = String(oldRow.rider_status || '').toLowerCase().trim();
-                const statusChanged = currentStatus !== oldStatus;
+                // ==========================================
+                // 🟢 1. NAYA ORDER PLACED (INSERT EVENT)
+                // ==========================================
+                if (payload.eventType === 'INSERT') {
+                    const uniqueKey = `new_order_${newRow.id}`;
+                    if (sentNotifications.has(uniqueKey)) return; // Duplicate check
+                    sentNotifications.add(uniqueKey);
 
-                const isBillUploaded = newRow.bill_image && (newRow.bill_image !== oldRow.bill_image || newRow.bill_amount !== oldRow.bill_amount);
-                const isRiderOnWay = (currentStatus === 'on_the_way' || currentStatus === 'ontheway' || currentStatus === 'on the way') && statusChanged;
+                    const buttonData = {
+                        title: '🎉 Order Confirmed!',
+                        text: `Thank you for your order!\n\n📦 *Order ID:* #${newRow.id}\n\nAap apne order ka status dekhne aur rider se chat karne ke liye neeche diye gaye button par click karein.`,
+                        footer: 'Faster Support',
+                        buttons: [
+                            {
+                                name: 'cta_url',
+                                buttonParamsJson: JSON.stringify({
+                                    display_text: '📦 Track Order / Chat',
+                                    url: `https://waseemakramkhan126-max.github.io/faster-v2/active-orders.html?id=${newRow.id}` // 👈 Yahan apna sahi link dalein
+                                })
+                            }
+                        ]
+                    };
 
-                const uniqueKey = `${newRow.id}_${currentStatus}_${newRow.bill_image || ''}`;
-                if (sentNotifications.has(uniqueKey)) {
-                    console.log(`⚠️ Duplicate notification blocked for Order ${newRow.id}`);
-                    return; 
-                }
-                sentNotifications.add(uniqueKey);
-
-                if (isBillUploaded || isRiderOnWay) {
-                    const billAmt = (Number(newRow.item_price) || 0) + (Number(newRow.dc_amount) || 0);
-                    
-                    const rawWalletBalance = await getWalletBalance(newRow.customer_phone);
-                    const walletBalance = Number(rawWalletBalance) || 0;
-
-                    let captionText = `📄 *Order Bill Details*\n\n`;
-                    captionText += `Bill Amount: Rs. ${billAmt}\n`;
-
-                    let totalPayable = billAmt;
-
-                    if (walletBalance > 0) {
-                        captionText += `Previous Due: Rs. ${walletBalance}\n`;
-                        totalPayable = billAmt + walletBalance;
-                    } else if (walletBalance < 0) {
-                        captionText += `Your Remaining Amount: Rs. ${Math.abs(walletBalance)}\n`;
-                        totalPayable = billAmt + walletBalance; 
-                    }
-
-                    captionText += `----------------------\n`;
-                    captionText += `*Total Payable: Rs. ${totalPayable}/-*\n\n`;
-                    captionText += `*Rider is on the way 🏍️*`;
-
-                    let sentBill = false;
-                    // 👇 Yahan 'true' pass kiya hai (Notification Delay ke liye)
-                    if (newRow.bill_image) {
-                        sentBill = await sendHumanLikeImage(sock, jid, newRow.bill_image, captionText, null, false, true);
-                    } else {
-                        sentBill = await sendHumanLikeReply(sock, jid, captionText, null, false, true);
-                    }
-                    
-                    if (sentBill !== false) {
-                        console.log(`✅ Bill & On-The-Way details sent to ${jid}`);
-                    }
+                    await sendButtonReply(sock, jid, buttonData, null, false);
+                    console.log(`✅ New Order Confirmation sent to ${jid} for Order #${newRow.id}`);
+                    return; // Insert ka kaam khatam
                 }
 
-                if (currentStatus === 'arrived' && statusChanged) {
-                    const arrivedMsg = `*Your order has arrived 🏠*\nPlease receive your order.`;
-                    // 👇 Yahan 'true' pass kiya hai
-                    const sentArrived = await sendHumanLikeReply(sock, jid, arrivedMsg, null, false, true);
-                    
-                    if (sentArrived !== false) {
-                        console.log(`✅ Arrived message sent to ${jid}`);
+                // ==========================================
+                // 🔵 2. RIDER STATUS UPDATE (UPDATE EVENT)
+                // ==========================================
+                if (payload.eventType === 'UPDATE') {
+                    const currentStatus = String(newRow.rider_status || '').toLowerCase().trim();
+                    const oldStatus = String(oldRow.rider_status || '').toLowerCase().trim();
+                    const statusChanged = currentStatus !== oldStatus;
+
+                    const isBillUploaded = newRow.bill_image && (newRow.bill_image !== oldRow.bill_image || newRow.bill_amount !== oldRow.bill_amount);
+                    const isRiderOnWay = (currentStatus === 'on_the_way' || currentStatus === 'ontheway' || currentStatus === 'on the way') && statusChanged;
+
+                    const uniqueKey = `${newRow.id}_${currentStatus}_${newRow.bill_image || ''}`;
+                    if (sentNotifications.has(uniqueKey)) {
+                        console.log(`⚠️ Duplicate notification blocked for Order ${newRow.id}`);
+                        return; 
                     }
-                }
+                    sentNotifications.add(uniqueKey);
 
-                                if ((currentStatus === 'delivered' || currentStatus === 'completed') && statusChanged) {
-                    const billAmount = Number(newRow.bill_amount) || 0;
-                    const balanceAmt = Number(newRow.balance_amount) || 0;
-                    const paidToRider = billAmount - balanceAmt;
+                    if (isBillUploaded || isRiderOnWay) {
+                        const billAmt = (Number(newRow.item_price) || 0) + (Number(newRow.dc_amount) || 0);
+                        const rawWalletBalance = await getWalletBalance(newRow.customer_phone);
+                        const walletBalance = Number(rawWalletBalance) || 0;
 
-                    let deliveredMsg = "";
+                        let captionText = `📄 *Order Bill Details*\n\n`;
+                        captionText += `Bill Amount: Rs. ${billAmt}\n`;
 
-                    if (balanceAmt > 0) {
-                        // Customer ne kam paise diye (Pending Amount)
-                        deliveredMsg = 
-                            `🧾 *Order Payment Summary*\n\n` +
-                            `Total Bill: Rs. ${billAmount}/- \n` +
-                            `Paid to Rider: Rs. ${paidToRider}/-\n\n` +
-                            `⚠️ *Your Pending Amount: Rs. ${balanceAmt}/-*\n\n` +
-                            `Please clear this amount on your next order.\n\n` +
-                            `✅ *Order Completed*\n\n` +
-                            `Thank you for choosing Faster! We truly appreciate your trust in our services.`;
+                        let totalPayable = billAmt;
 
-                    } else if (balanceAmt < 0) {
-                        // Customer ne zyada paise diye (Remaining Amount)
-                        deliveredMsg = 
-                            `🧾 *Order Payment Summary*\n\n` +
-                            `Total Bill: Rs. ${billAmount}/- \n` +
-                            `Paid to Rider: Rs. ${paidToRider}/-\n\n` +
-                            `💵 *Your Remaining Amount: Rs. ${Math.abs(balanceAmt)}/-*\n\n` +
-                            `Your credit balance will be automatically adjusted in your next order.\n\n` +
-                            `✅ *Order Completed*\n\n` +
-                            `Thank you for choosing Faster! We truly appreciate your trust in our services.`;
+                        if (walletBalance > 0) {
+                            captionText += `Previous Due: Rs. ${walletBalance}\n`;
+                            totalPayable = billAmt + walletBalance;
+                        } else if (walletBalance < 0) {
+                            captionText += `Your Remaining Amount: Rs. ${Math.abs(walletBalance)}\n`;
+                            totalPayable = billAmt + walletBalance; 
+                        }
 
-                    } else {
-                        // Barabar paise diye
-                        deliveredMsg = 
-                            `🧾 *Order Payment Summary*\n\n` +
-                            `Total Bill: Rs. ${billAmount}/- \n` +
-                            `Paid to Rider: Rs. ${paidToRider}/-\n\n` +
-                            `✅ *Order Completed*\n\n` +
-                            `Thank you for choosing Faster! We truly appreciate your trust in our services.`;
+                        captionText += `----------------------\n`;
+                        captionText += `*Total Payable: Rs. ${totalPayable}/-*\n\n`;
+                        captionText += `*Rider is on the way 🏍️*`;
+
+                        let sentBill = false;
+                        if (newRow.bill_image) {
+                            sentBill = await sendHumanLikeImage(sock, jid, newRow.bill_image, captionText, null, false, true);
+                        } else {
+                            sentBill = await sendHumanLikeReply(sock, jid, captionText, null, false, true);
+                        }
+                        
+                        if (sentBill !== false) console.log(`✅ Bill & On-The-Way details sent to ${jid}`);
                     }
 
-                    // 👇 Yahan 'true' pass kiya hai
-                    const sentDelivered = await sendHumanLikeReply(sock, jid, deliveredMsg, null, false, true);
-                    
-                    if (sentDelivered !== false) {
-                        console.log(`✅ Delivered message sent to ${jid}`);
+                    if (currentStatus === 'arrived' && statusChanged) {
+                        const arrivedMsg = `*Your order has arrived 🏠*\nPlease receive your order.`;
+                        const sentArrived = await sendHumanLikeReply(sock, jid, arrivedMsg, null, false, true);
+                        if (sentArrived !== false) console.log(`✅ Arrived message sent to ${jid}`);
+                    }
+
+                    if ((currentStatus === 'delivered' || currentStatus === 'completed') && statusChanged) {
+                        const billAmount = Number(newRow.bill_amount) || 0;
+                        const balanceAmt = Number(newRow.balance_amount) || 0;
+                        const paidToRider = billAmount - balanceAmt;
+
+                        let deliveredMsg = "";
+
+                        if (balanceAmt > 0) {
+                            deliveredMsg = 
+                                `🧾 *Order Payment Summary*\n\n` +
+                                `Total Bill: Rs. ${billAmount}/- \n` +
+                                `Paid to Rider: Rs. ${paidToRider}/-\n\n` +
+                                `⚠️ *Your Pending Amount: Rs. ${balanceAmt}/-*\n\n` +
+                                `Please clear this amount on your next order.\n\n` +
+                                `✅ *Order Completed*\n\n` +
+                                `Thank you for choosing Faster! We truly appreciate your trust in our services.`;
+                        } else if (balanceAmt < 0) {
+                            deliveredMsg = 
+                                `🧾 *Order Payment Summary*\n\n` +
+                                `Total Bill: Rs. ${billAmount}/- \n` +
+                                `Paid to Rider: Rs. ${paidToRider}/-\n\n` +
+                                `💵 *Your Remaining Amount: Rs. ${Math.abs(balanceAmt)}/-*\n\n` +
+                                `Your credit balance will be automatically adjusted in your next order.\n\n` +
+                                `✅ *Order Completed*\n\n` +
+                                `Thank you for choosing Faster! We truly appreciate your trust in our services.`;
+                        } else {
+                            deliveredMsg = 
+                                `🧾 *Order Payment Summary*\n\n` +
+                                `Total Bill: Rs. ${billAmount}/- \n` +
+                                `Paid to Rider: Rs. ${paidToRider}/-\n\n` +
+                                `✅ *Order Completed*\n\n` +
+                                `Thank you for choosing Faster! We truly appreciate your trust in our services.`;
+                        }
+
+                        const sentDelivered = await sendHumanLikeReply(sock, jid, deliveredMsg, null, false, true);
+                        if (sentDelivered !== false) console.log(`✅ Delivered message sent to ${jid}`);
                     }
                 }
             }
