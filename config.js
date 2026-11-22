@@ -13,7 +13,7 @@ module.exports = {
 
     DEAD_END_KEYWORDS: ['ok', 'okay', 'okei', 'theek hai', 'thik hai', 'thanks', 'thank you', 'shukriya', 'nice service', '👍', '🙏', '😊', '❤️'],
 
-    CHUNK_SIZE: 200,
+    CHUNK_SIZE: 1000,
     CHUNK_GAP: 1500,
     NIGHT_START_HOUR: 0,
     NIGHT_END_HOUR: 8,
