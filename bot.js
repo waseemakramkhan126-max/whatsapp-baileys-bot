@@ -399,7 +399,7 @@ function setupOrderRealtimeListener(sock) {
                     }
                 }
 
-                if ((currentStatus === 'delivered' || currentStatus === 'completed') && statusChanged) {
+                                if ((currentStatus === 'delivered' || currentStatus === 'completed') && statusChanged) {
                     const billAmount = Number(newRow.bill_amount) || 0;
                     const balanceAmt = Number(newRow.balance_amount) || 0;
                     const paidToRider = billAmount - balanceAmt;
@@ -407,11 +407,35 @@ function setupOrderRealtimeListener(sock) {
                     let deliveredMsg = "";
 
                     if (balanceAmt > 0) {
-                        deliveredMsg = `Total Bill: Rs. *${billAmount}*\nPaid To Rider: Rs. ${paidToRider}\n⚠️ Your Pending Amount: Rs. *${balanceAmt}*\n\n*✅ Order Completed:*\nThank you for choosing Faster, we appreciate your trust in our services.`;
+                        // Customer ne kam paise diye (Pending Amount)
+                        deliveredMsg = 
+                            `🧾 *Order Payment Summary*\n\n` +
+                            `Total Bill: Rs. ${billAmount}/- \n` +
+                            `Paid to Rider: Rs. ${paidToRider}/-\n\n` +
+                            `⚠️ *Your Pending Amount: Rs. ${balanceAmt}/-*\n\n` +
+                            `Please clear this amount on your next order.\n\n` +
+                            `✅ *Order Completed*\n\n` +
+                            `Thank you for choosing Faster! We truly appreciate your trust in our services.`;
+
                     } else if (balanceAmt < 0) {
-                        deliveredMsg = `Total Bill: Rs. *${billAmount}*\nPaid To Rider: Rs. *${paidToRider}*\n⚠️ Your Remaining Amount: Rs. *${Math.abs(balanceAmt)}*\n\n*✅ Order Completed:*\nThank you for choosing Faster, we appreciate your trust in our services.`;
+                        // Customer ne zyada paise diye (Remaining Amount)
+                        deliveredMsg = 
+                            `🧾 *Order Payment Summary*\n\n` +
+                            `Total Bill: Rs. ${billAmount}/- \n` +
+                            `Paid to Rider: Rs. ${paidToRider}/-\n\n` +
+                            `💵 *Your Remaining Amount: Rs. ${Math.abs(balanceAmt)}/-*\n\n` +
+                            `Your credit balance will be automatically adjusted in your next order.\n\n` +
+                            `✅ *Order Completed*\n\n` +
+                            `Thank you for choosing Faster! We truly appreciate your trust in our services.`;
+
                     } else {
-                        deliveredMsg = `*✅ Order Completed:*\nThank you for choosing Faster, we appreciate your trust in our services.`;
+                        // Barabar paise diye
+                        deliveredMsg = 
+                            `🧾 *Order Payment Summary*\n\n` +
+                            `Total Bill: Rs. ${billAmount}/- \n` +
+                            `Paid to Rider: Rs. ${paidToRider}/-\n\n` +
+                            `✅ *Order Completed*\n\n` +
+                            `Thank you for choosing Faster! We truly appreciate your trust in our services.`;
                     }
 
                     // 👇 Yahan 'true' pass kiya hai
