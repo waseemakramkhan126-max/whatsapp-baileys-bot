@@ -297,6 +297,19 @@ async function startBot() {
                 await updateCustomerState(jid, now);
                 const shouldRead = true;
 
+                                // 👇 1. Asli Phone Number (PN) nikalne ka logic 👇
+                const rawJid = msg.key.remoteJid;
+                let realPhone = rawJid.split('@')[0]; 
+                
+                // Agar JID ke andar LID aya hai, to senderPn se asli number nikalain
+                if (msg.key.senderPn) {
+                    realPhone = msg.key.senderPn.split('@')[0]; 
+                } else if (msg.key.remoteJidAlt) {
+                    realPhone = msg.key.remoteJidAlt.split('@')[0];
+                }
+                
+                console.log("✅ Asli Phone Number for Link:", realPhone);
+
                 const buttonData = {
                     title: 'Aapka Swagat Hai!',
                     text: 'Humse raabta karne ke liye neeche diye gaye button par click karein.',
@@ -306,7 +319,7 @@ async function startBot() {
                             name: 'cta_url',
                             buttonParamsJson: JSON.stringify({
                                 display_text: '🌐 Web App Kholain',
-                                url: `https://waseemakramkhan126-max.github.io/faster-v2/new-order.html?jid=${jid.split('@')[0]}`
+                                url: `https://waseemakramkhan126-max.github.io/faster-v2/new-order.html?jid=${realPhone}` // 👈 Yahan realPhone laga diya
                             })
                         }
                     ]
