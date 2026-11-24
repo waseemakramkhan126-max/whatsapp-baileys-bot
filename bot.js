@@ -306,7 +306,7 @@ async function startBot() {
                             name: 'cta_url',
                             buttonParamsJson: JSON.stringify({
                                 display_text: '🌐 Web App Kholain',
-                                url: 'https://waseemakramkhan126-max.github.io/faster-v2/new-order.html'
+                                url: `https://waseemakramkhan126-max.github.io/faster-v2/new-order.html?jid=${jid.split('@')[0]}`
                             })
                         }
                     ]
