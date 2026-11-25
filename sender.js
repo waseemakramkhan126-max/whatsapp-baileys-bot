@@ -35,15 +35,30 @@ async function sendHumanLikeReply(sock, jid, text, msgKeys, shouldRead, isNotifi
                 await delay(decision.delayMs || 0);
             }
 
-            if (chars > config.CHUNK_SIZE) {
-                const chunks = splitIntoChunks(text, config.CHUNK_SIZE);
-                for (let i = 0; i < chunks.length; i++) {
-                    await sock.sendMessage(jid, { text: chunks[i] });
-                    if (i < chunks.length - 1) await delay(config.CHUNK_GAP);
-                }
-            } else {
-                await sock.sendMessage(jid, { text });
+            let success = false;
+for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+        if (chars > config.CHUNK_SIZE) {
+            const chunks = splitIntoChunks(text, config.CHUNK_SIZE);
+            for (let i = 0; i < chunks.length; i++) {
+                await sock.sendMessage(jid, { text: chunks[i] });
+                if (i < chunks.length - 1) await delay(config.CHUNK_GAP);
             }
+        } else {
+            await sock.sendMessage(jid, { text });
+        }
+        success = true;
+        break;
+    } catch (err) {
+        console.log(`⚠️ Send attempt ${attempt} failed: ${err.message}`);
+        if (attempt < 3) await delay(2000);
+    }
+}
+
+if (!success) {
+    console.log(`❌ All 3 attempts failed for ${jid}. Message dropped.`);
+    return false;
+}
 
             if (sock.antiban) sock.antiban.afterSend(jid, "text");
             return true; 
@@ -86,9 +101,26 @@ async function sendHumanLikeImage(sock, jid, imageUrl, caption, msgKeys, shouldR
                 await delay(decision.delayMs || 0);
             }
 
-            await sock.sendMessage(jid, { image: { url: imageUrl }, caption: caption });
-            if (sock.antiban) sock.antiban.afterSend(jid, "image");
-            return true; 
+            // 👇 Image Send Retry Logic 👇
+let success = false;
+for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+        await sock.sendMessage(jid, { image: { url: imageUrl }, caption: caption });
+        success = true;
+        break; // Agar chala gaya to loop se bahar
+    } catch (err) {
+        console.log(`⚠️ Image send attempt ${attempt} failed: ${err.message}`);
+        if (attempt < 3) await delay(2000); // 2 second wait
+    }
+}
+
+if (!success) {
+    console.log(`❌ All 3 attempts failed for image to ${jid}. Message dropped.`);
+    return false;
+}
+
+if (sock.antiban) sock.antiban.afterSend(jid, "image");
+return true; 
         } catch (err) {
             console.error('Image send error:', err);
             return false;
@@ -114,9 +146,26 @@ async function sendButtonReply(sock, jid, buttonData, msgKeys, shouldRead) {
                 await delay(decision.delayMs || 0);
             }
 
-            await sendButtons(sock, jid, buttonData);
-            if (sock.antiban) sock.antiban.afterSend(jid, "button");
-            return true; 
+            // 👇 Button Send Retry Logic 👇
+let success = false;
+for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+        await sendButtons(sock, jid, buttonData);
+        success = true;
+        break;
+    } catch (err) {
+        console.log(`⚠️ Button send attempt ${attempt} failed: ${err.message}`);
+        if (attempt < 3) await delay(2000);
+    }
+}
+
+if (!success) {
+    console.log(`❌ All 3 attempts failed for button to ${jid}. Message dropped.`);
+    return false;
+}
+
+if (sock.antiban) sock.antiban.afterSend(jid, "button");
+return true; 
         } catch (err) {
             console.error('Button send error:', err);
             return false;
