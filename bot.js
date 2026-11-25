@@ -5,7 +5,7 @@ const fs = require('fs');
 const { WebSocketServer } = require('ws');
 const { toDataURL } = require('qrcode');
 const { createClient } = require('@supabase/supabase-js');
-const { AntiBan } = require('baileys-antiban');
+const { AntiBan, classifyDisconnect } = require('baileys-antiban');
 const { handleIncomingMessage } = require('./debounce');
 const { sendHumanLikeReply, sendButtonReply, sendHumanLikeImage } = require('./sender');
 const config = require('./config');
@@ -106,9 +106,13 @@ async function startBot() {
     });
 
     const sock = makeWASocket({
-        auth: state,
-        syncFullHistory: false
-    });
+    auth: state,
+    syncFullHistory: false,
+    markOnlineOnConnect: false, // 👈 Phone par notifications aati rahein
+    getMessage: async (key) => {
+        return { conversation: 'Retrying...' }; // 👈 Auto-Retry ke liye
+    }
+});
      
     sock.antiban = antiban;
 
@@ -125,24 +129,18 @@ async function startBot() {
             console.log('✅ Bot connected to WhatsApp');
             setupOrderRealtimeListener(sock);
         } else if (connection === 'close') {
-            const statusCode = (lastDisconnect?.error)?.output?.statusCode;
-            const shouldReconnect = statusCode !== 401;
+    const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+    const classification = classifyDisconnect(statusCode);
 
-            if (shouldReconnect) {
-                reconnectAttempts++;
-                if (reconnectAttempts > 5) {
-                    console.log('❌ Max reconnect attempts reached.');
-                    process.exit(1);
-                }
-                const delay = Math.floor(Math.random() * 5000) + 5000;
-                console.log(`⏳ Reconnecting in ${delay / 1000}s... (attempt ${reconnectAttempts})`);
-                setTimeout(() => startBot(), delay);
-            } else {
-                console.log('❌ Session logged out, clearing auth_info...');
-                fs.rmSync('auth_info', { recursive: true, force: true });
-                startBot();
-            }
-        }
+    if (classification.shouldReconnect) {
+        console.log(`⏳ Reconnecting (Reason: ${classification.message}) in ${classification.backoffMs}ms...`);
+        setTimeout(() => startBot(), classification.backoffMs);
+    } else {
+        console.log('❌ Session logged out. Clearing auth_info and generating new QR...');
+        fs.rmSync('auth_info', { recursive: true, force: true });
+        startBot();
+    }
+}
     });
 
     sock.ev.on('messages.upsert', async (m) => {
