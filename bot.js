@@ -96,14 +96,15 @@ server.listen(3000, () => {
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
-        const antiban = new AntiBan({
-        maxPerMinute: 20, // 👈 10 se barha kar 20 kar diya (Number purana hai)
-        maxPerHour: 300,  // 👈 200 se barha kar 300 kar diya
-        warmupDays: 0,    // 👈 7 se 0 kar diya (Kyunke number purana hai)
-        day1Limit: 500,
-        growthFactor: 1.8,
-        logging: true
-    });
+            const antiban = new AntiBan({
+    maxPerMinute: 30,   // 20 se 30 kar diya
+    maxPerHour: 500,    // 300 se 500 kar diya
+    maxPerDay: 2000,    // Naya add kiya
+    warmupDays: 0,    
+    day1Limit: 500,
+    growthFactor: 1.8,
+    logging: true
+});
 
     const sock = makeWASocket({
     auth: state,
