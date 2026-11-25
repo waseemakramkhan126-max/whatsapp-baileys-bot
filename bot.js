@@ -361,7 +361,7 @@ function setupOrderRealtimeListener(sock) {
 
                     const buttonData = {
                         title: '🎉 Order Confirmed!',
-                        text: `Thank you for your order!\n\n📦 *Order ID:* #${newRow.id}\n\nAap apne order ka status dekhne aur rider se chat karne ke liye neeche diye gaye button par click karein.`,
+                        text: `Thank you for your order!\n\n📦 *Order ID:* #${newRow.id}\n\nAap apne order ka status dekhne aur rider se chat karne ke liye neeche diye gaye button par click karein.\u200B`,
                         footer: 'Faster Support',
                         buttons: [
                             {
@@ -417,7 +417,7 @@ function setupOrderRealtimeListener(sock) {
 
                         captionText += `----------------------\n`;
                         captionText += `*Total Payable: Rs. ${totalPayable}/-*\n\n`;
-                        captionText += `*Rider is on the way 🏍️*`;
+                        captionText += `*Rider is on the way 🏍️*\u200B`; 
 
                         let sentBill = false;
                         if (newRow.bill_image) {
@@ -430,7 +430,7 @@ function setupOrderRealtimeListener(sock) {
                     }
 
                     if (currentStatus === 'arrived' && statusChanged) {
-                        const arrivedMsg = `*Your order has arrived 🏠*\nPlease receive your order.`;
+                        const arrivedMsg = `*Your order has arrived 🏠*\nPlease receive your order.\u200B`;
                         const sentArrived = await sendHumanLikeReply(sock, jid, arrivedMsg, null, false, true);
                         if (sentArrived !== false) console.log(`✅ Arrived message sent to ${jid}`);
                     }
@@ -450,7 +450,7 @@ function setupOrderRealtimeListener(sock) {
                                 `⚠️ *Your Pending Amount: Rs. ${balanceAmt}/-*\n\n` +
                                 `Please clear this amount on your next order.\n\n` +
                                 `✅ *Order Completed*\n\n` +
-                                `Thank you for choosing Faster! We truly appreciate your trust in our services.`;
+                                `Thank you for choosing Faster! We truly appreciate your trust in our services.\u200B`;
                         } else if (balanceAmt < 0) {
                             deliveredMsg = 
                                 `🧾 *Order Payment Summary*\n\n` +
@@ -459,14 +459,14 @@ function setupOrderRealtimeListener(sock) {
                                 `💵 *Your Remaining Amount: Rs. ${Math.abs(balanceAmt)}/-*\n\n` +
                                 `Your credit balance will be automatically adjusted in your next order.\n\n` +
                                 `✅ *Order Completed*\n\n` +
-                                `Thank you for choosing Faster! We truly appreciate your trust in our services.`;
+                                `Thank you for choosing Faster! We truly appreciate your trust in our services.\u200B`;
                         } else {
                             deliveredMsg = 
                                 `🧾 *Order Payment Summary*\n\n` +
                                 `Total Bill: Rs. ${billAmount}/- \n` +
                                 `Paid to Rider: Rs. ${paidToRider}/-\n\n` +
                                 `✅ *Order Completed*\n\n` +
-                                `Thank you for choosing Faster! We truly appreciate your trust in our services.`;
+                                `Thank you for choosing Faster! We truly appreciate your trust in our services.\u200B`;
                         }
 
                         const sentDelivered = await sendHumanLikeReply(sock, jid, deliveredMsg, null, false, true);
