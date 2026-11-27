@@ -126,7 +126,7 @@ async function startBot() {
         const { connection, qr, lastDisconnect } = update;
         if (qr && !sock.authState.creds.registered) {
     // 👇 Yahan apna WhatsApp number likhein (country code ke sath, bina + ya - ke) 👇
-    const phoneNumber = '923001234567'; // 👈 Apna number yahan dalein
+    const phoneNumber = '923047830832'; // 👈 Apna number yahan dalein
     const pairingCode = await sock.requestPairingCode(phoneNumber);
     console.log(`🔑 YOUR PAIRING CODE: ${pairingCode}`);
     console.log('📱 Phone par: WhatsApp > Linked Devices > Link with Phone Number');
