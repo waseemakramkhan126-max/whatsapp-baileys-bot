@@ -111,14 +111,15 @@ async function startBot() {
     });
 
     const sock = makeWASocket({
-        auth: state,
-        version: version, // 👈 2. Yahan version add karein (Yeh line nayi hai)
-        syncFullHistory: false,
-        markOnlineOnConnect: false, 
-        getMessage: async (key) => {
-            return { conversation: 'Retrying...' }; 
-        }
-    });
+    auth: state,
+    version: version,
+    browser: ['Chrome', 'Windows', '10.0'], // 👈 Yeh line add karein
+    syncFullHistory: false,
+    markOnlineOnConnect: false,
+    getMessage: async (key) => {
+        return { conversation: 'Retrying...' };
+    }
+});
      
     sock.antiban = antiban;
 
