@@ -124,11 +124,13 @@ async function startBot() {
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, qr, lastDisconnect } = update;
-        if (qr) {
-            console.log('Scan QR at http://localhost:3000/qr');
-            const qrImage = await toDataURL(qr);
-            app.get('/qr', (req, res) => res.send(`<html><body><img src="${qrImage}" /></body></html>`));
-        }
+        if (qr && !sock.authState.creds.registered) {
+    // 👇 Yahan apna WhatsApp number likhein (country code ke sath, bina + ya - ke) 👇
+    const phoneNumber = '923001234567'; // 👈 Apna number yahan dalein
+    const pairingCode = await sock.requestPairingCode(phoneNumber);
+    console.log(`🔑 YOUR PAIRING CODE: ${pairingCode}`);
+    console.log('📱 Phone par: WhatsApp > Linked Devices > Link with Phone Number');
+}
 
         if (connection === 'open') {
             reconnectAttempts = 0;
