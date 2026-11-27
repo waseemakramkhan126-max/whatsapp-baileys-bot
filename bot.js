@@ -188,11 +188,16 @@ async function startBot() {
     waConnected = false;
     const statusCode = (lastDisconnect?.error)?.output?.statusCode;
     const classification = classifyDisconnect(statusCode);
+    console.log('Disconnect code:', statusCode);
 
-    if (classification.shouldReconnect) {
+    // 515 = pairing ke baad WhatsApp restart maangta hai. Session delete NAHI karna, bas dobara connect karna hai.
+    if (statusCode === 515 || statusCode === 428 || statusCode === 408) {
+        console.log(`🔄 Restart required (code ${statusCode}) — reconnecting, auth kept`);
+        setTimeout(() => startBot(), 1000);
+    } else if (statusCode !== 401 && statusCode !== 403 && classification.shouldReconnect) {
         console.log(`⏳ Reconnecting (Reason: ${classification.message}) in ${classification.backoffMs}ms...`);
         setTimeout(() => startBot(), classification.backoffMs);
-    } else {
+    } else if (statusCode === 401 || statusCode === 403 || !classification.shouldReconnect) {
         console.log('❌ Session logged out. Clearing auth_info and generating new QR...');
         // auth_info volume mount hai, folder delete nahi ho sakta — sirf andar ki files hatao
         for (const f of fs.existsSync('auth_info') ? fs.readdirSync('auth_info') : []) fs.rmSync(`auth_info/${f}`, { recursive: true, force: true });
