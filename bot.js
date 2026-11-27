@@ -88,16 +88,38 @@ let latestQR = null;
 let latestPairingCode = null;
 let waConnected = false;
 
-app.get('/qr', async (req, res) => {
+app.get('/qr.json', async (req, res) => {
     res.set('Cache-Control', 'no-store');
-    let body;
-    if (waConnected) body = '<h2>✅ WhatsApp connected</h2>';
-    else if (latestQR) {
-        const img = await toDataURL(latestQR, { width: 320 });
-        body = `<h2>Scan with WhatsApp &gt; Linked Devices</h2><img src="${img}">` +
-            (latestPairingCode ? `<p>Ya phone number se link karein, code: <b>${latestPairingCode}</b></p>` : '');
-    } else body = '<h2>QR generate ho raha hai... page refresh hota rahega</h2>';
-    res.send(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><body style="font-family:sans-serif;text-align:center;padding:2em">${body}</body>`);
+    res.json({
+        connected: waConnected,
+        qr: latestQR,
+        img: latestQR && !waConnected ? await toDataURL(latestQR, { width: 360, margin: 2 }) : null,
+        code: latestPairingCode
+    });
+});
+
+app.get('/qr', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.send(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+<body style="font-family:sans-serif;text-align:center;padding:2em">
+<h2 id="t">Loading...</h2><img id="i" style="max-width:90vw"><p id="c"></p>
+<script>
+let last = null;
+async function tick() {
+  try {
+    const d = await (await fetch('/qr.json')).json();
+    const t = document.getElementById('t'), i = document.getElementById('i'), c = document.getElementById('c');
+    if (d.connected) { t.textContent = '✅ WhatsApp connected'; i.style.display = 'none'; c.textContent = ''; }
+    else if (d.img) {
+      t.textContent = 'Scan: WhatsApp > Linked Devices > Link a Device';
+      if (d.qr !== last) { i.src = d.img; last = d.qr; }
+      i.style.display = '';
+      c.innerHTML = d.code ? 'Ya phone number se link karein, code: <b>' + d.code + '</b>' : '';
+    } else { t.textContent = 'QR generate ho raha hai...'; i.style.display = 'none'; }
+  } catch (e) {}
+}
+tick(); setInterval(tick, 2000);
+</script></body>`);
 });
 
 app.use(express.static('dashboard'));
