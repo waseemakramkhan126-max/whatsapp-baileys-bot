@@ -1,4 +1,4 @@
-const { makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const { makeWASocket, useMultiFileAuthState, fetchLatestWaWebVersion } = require('@whiskeysockets/baileys');
 const express = require('express');
 const http = require('http');
 const fs = require('fs');
@@ -96,24 +96,29 @@ server.listen(3000, () => {
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
-            const antiban = new AntiBan({
-    maxPerMinute: 30,   // 20 se 30 kar diya
-    maxPerHour: 500,    // 300 se 500 kar diya
-    maxPerDay: 2000,    // Naya add kiya
-    warmupDays: 0,    
-    day1Limit: 500,
-    growthFactor: 1.8,
-    logging: true
-});
+    // 👇 1. WhatsApp ka latest version fetch karein (QR Error Fix) 👇
+    const { version, isLatest } = await fetchLatestWaWebVersion();
+    console.log(`📱 WhatsApp Web Version: ${version.join('.')} | Latest: ${isLatest}`);
+
+    const antiban = new AntiBan({
+        maxPerMinute: 30,   
+        maxPerHour: 500,    
+        maxPerDay: 2000,    
+        warmupDays: 0,    
+        day1Limit: 500,
+        growthFactor: 1.8,
+        logging: true
+    });
 
     const sock = makeWASocket({
-    auth: state,
-    syncFullHistory: false,
-    markOnlineOnConnect: false, // 👈 Phone par notifications aati rahein
-    getMessage: async (key) => {
-        return { conversation: 'Retrying...' }; // 👈 Auto-Retry ke liye
-    }
-});
+        auth: state,
+        version: version, // 👈 2. Yahan version add karein (Yeh line nayi hai)
+        syncFullHistory: false,
+        markOnlineOnConnect: false, 
+        getMessage: async (key) => {
+            return { conversation: 'Retrying...' }; 
+        }
+    });
      
     sock.antiban = antiban;
 
