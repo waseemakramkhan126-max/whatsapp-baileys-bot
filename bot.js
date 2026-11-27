@@ -84,11 +84,28 @@ function broadcastLog(message) {
     wss.clients.forEach(client => client.send(JSON.stringify({ type: 'log', message })));
 }
 
+let latestQR = null;
+let latestPairingCode = null;
+let waConnected = false;
+
+app.get('/qr', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    let body;
+    if (waConnected) body = '<h2>✅ WhatsApp connected</h2>';
+    else if (latestQR) {
+        const img = await toDataURL(latestQR, { width: 320 });
+        body = `<h2>Scan with WhatsApp &gt; Linked Devices</h2><img src="${img}">` +
+            (latestPairingCode ? `<p>Ya phone number se link karein, code: <b>${latestPairingCode}</b></p>` : '');
+    } else body = '<h2>QR generate ho raha hai... page refresh hota rahega</h2>';
+    res.send(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="5"><body style="font-family:sans-serif;text-align:center;padding:2em">${body}</body>`);
+});
+
 app.use(express.static('dashboard'));
 app.get('/dashboard', (req, res) => res.sendFile(__dirname + '/dashboard/index.html'));
 
-server.listen(3000, () => {
-    console.log('✅ Dashboard & QR server started on port 3000');
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`✅ Dashboard & QR server started on port ${PORT} (QR at /qr)`);
     appStarted = true;
     broadcastLog('🚀 Bot server started and ready');
 });
@@ -122,22 +139,31 @@ async function startBot() {
 });
      
     sock.antiban = antiban;
+    let pairingRequested = false;
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, qr, lastDisconnect } = update;
         if (qr && !sock.authState.creds.registered) {
-    // 👇 Yahan apna WhatsApp number likhein (country code ke sath, bina + ya - ke) 👇
-    const phoneNumber = '923047830832'; // 👈 Apna number yahan dalein
-    const pairingCode = await sock.requestPairingCode(phoneNumber);
-    console.log(`🔑 YOUR PAIRING CODE: ${pairingCode}`);
-    console.log('📱 Phone par: WhatsApp > Linked Devices > Link with Phone Number');
-}
+            latestQR = qr;
+            console.log('📷 QR ready — open /qr on the service URL to scan');
+            // Pairing code sirf ek baar (har QR refresh par naya code banne se purana invalid ho jata tha)
+            if (!pairingRequested && process.env.PAIRING_PHONE) {
+                pairingRequested = true;
+                try {
+                    latestPairingCode = await sock.requestPairingCode(process.env.PAIRING_PHONE);
+                    console.log(`🔑 YOUR PAIRING CODE: ${latestPairingCode}`);
+                } catch (e) { console.log('Pairing code error:', e.message); }
+            }
+        }
 
         if (connection === 'open') {
             reconnectAttempts = 0;
+            waConnected = true;
+            latestQR = null;
             console.log('✅ Bot connected to WhatsApp');
             setupOrderRealtimeListener(sock);
         } else if (connection === 'close') {
+    waConnected = false;
     const statusCode = (lastDisconnect?.error)?.output?.statusCode;
     const classification = classifyDisconnect(statusCode);
 
@@ -146,7 +172,8 @@ async function startBot() {
         setTimeout(() => startBot(), classification.backoffMs);
     } else {
         console.log('❌ Session logged out. Clearing auth_info and generating new QR...');
-        fs.rmSync('auth_info', { recursive: true, force: true });
+        // auth_info volume mount hai, folder delete nahi ho sakta — sirf andar ki files hatao
+        for (const f of fs.existsSync('auth_info') ? fs.readdirSync('auth_info') : []) fs.rmSync(`auth_info/${f}`, { recursive: true, force: true });
         startBot();
     }
 }
