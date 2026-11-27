@@ -125,7 +125,7 @@ tick(); setInterval(tick, 2000);
 app.use(express.static('dashboard'));
 app.get('/dashboard', (req, res) => res.sendFile(__dirname + '/dashboard/index.html'));
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`✅ Dashboard & QR server started on port ${PORT} (QR at /qr)`);
     appStarted = true;
