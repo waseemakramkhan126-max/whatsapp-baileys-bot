@@ -398,11 +398,18 @@ async function startBot() {
     sock.ev.on('creds.update', saveCreds);
 }
 
+let activeOrdersChannel = null;
+
 function setupOrderRealtimeListener(sock) {
+    // Purane socket wala listener hatao, warna reconnect ke baad dead sock se send hota hai
+    if (activeOrdersChannel) {
+        try { supabase.removeChannel(activeOrdersChannel); } catch (e) {}
+        activeOrdersChannel = null;
+    }
     console.log('📡 Listening for Realtime updates on "orders" table...');
     const channelName = `realtime-orders-${Date.now()}`;
 
-    supabase
+    activeOrdersChannel = supabase
         .channel(channelName)
         .on(
             'postgres_changes',
@@ -436,8 +443,13 @@ function setupOrderRealtimeListener(sock) {
                         ]
                     };
 
-                    await sendButtonReply(sock, jid, buttonData, null, false);
-                    console.log(`✅ New Order Confirmation sent to ${jid} for Order #${newRow.id}`);
+                    const sentOk = await sendButtonReply(sock, jid, buttonData, null, false);
+                    if (sentOk) {
+                        console.log(`✅ New Order Confirmation sent to ${jid} for Order #${newRow.id}`);
+                    } else {
+                        sentNotifications.delete(uniqueKey);
+                        console.log(`❌ New Order Confirmation FAILED for ${jid} Order #${newRow.id}`);
+                    }
                     return; // Insert ka kaam khatam
                 }
 
